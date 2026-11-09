@@ -1,5 +1,7 @@
 #!/bin/sh
 [ -z "${IPKG_INSTROOT:-}" ] || exit 0
 /etc/init.d/rpcd reload
+/etc/init.d/network-speed-test enable
+/etc/init.d/network-speed-test restart
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*.json
 exit 0

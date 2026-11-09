@@ -44,32 +44,39 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
 
 ## Operation
 
-- Each direction warms up for at least one second. Measurements normally last
-  six seconds, extending to ten when recent readings vary. Slow individual
-  requests can extend elapsed time; each CGI process has a 20-second hard limit.
-- Download uses an uncompressed, reused random buffer. Uploads are adaptively
-  sized up to 32 MiB and are counted only after the router confirms receipt.
-- Payloads are streamed/discarded in memory. A tiny exclusive-run lease lives in
-  `/var/run/network-speed-test` (OpenWrt RAM storage). No payload or results are
-  written to flash. The latest completed result (client-reported byte counts,
-  timings, radio before/after and router CPU usage) is kept in RAM for diagnosis.
-  A new completed result replaces it; reboot clears it. It contains no client IP,
-  MAC address or session token. There is no accumulated result history.
-- The existing LuCI web server serves the CGI endpoint. No extra listener,
-  firewall opening, scheduled test or background daemon is installed.
-- Every request requires a live LuCI session with the package ACL. The session
-  token is sent in the Authorization header, never in a URL. A short-lived,
-  HTTP-only run cookie is bound to the session and requesting IP address.
-- Only one run is accepted at a time. Leaving or hiding the page interrupts the
-  measurement; incomplete results are cleared. Abandoned leases expire in 90 seconds.
-- If the requesting Wi-Fi neighbour can be identified, the band/channel is shown.
-  A different association at the end is reported. This comparison does not detect
-  every brief roam away and back. A busy router CPU is reported as a possible limit.
-
-The transfer engine is a small Go CGI executable using only the standard library.
-It reuses OpenWrt's web server and session authorization. Each transfer request
-starts a CGI process; adaptive upload blocks amortize that overhead. Validate on
-the actual hardware before treating results as a radio-capacity benchmark.
+- LuCI handles the normal router login and disclaimer. Start opens the local
+  HTTP test page using a random, client-bound capability. The router password
+  and LuCI session token are never passed to that page. Its token can only run
+  speed tests, expires after 30 minutes, and cannot mint other tokens or access
+  router administration. Starting a new run rechecks the original LuCI session.
+- The browser supplies a 64 KiB data sample, generates upload buffers, measures
+  bytes and elapsed time, chooses test lengths, calculates throughput and
+  latency, and renders results. Reloading the test page does not run a test.
+- A native HTTP service listens on port 18080, bound to the LAN network device
+  using Linux SO_BINDTODEVICE. No firewall rule or global web-server setting is
+  changed. It serves the test and public LuCI styling assets; all measurement
+  operations require the scoped token and matching client address.
+- The data sample lives in OpenWrt RAM storage, not flash. Downloads reuse this
+  file via Linux sendfile. Uploads drain the small initial HTTP buffer, then use
+  Go's Linux splice path from the TCP socket to /dev/null. There is no payload
+  encryption, CGI pipe relay, per-packet generation or retained upload data in
+  the normal test path. Go has safe copy fallbacks where a kernel path is absent.
+- Each direction warms up for at least a second, measures for six to ten seconds,
+  and is bounded by transfer timeouts and one exclusive run lease. Leaving or
+  hiding the page interrupts the test. Payload work is bounded to 2 GiB per
+  download and 32 MiB per upload request.
+- The latest completed browser result, radio before/after, transport and CPU
+  diagnostics are kept in RAM for troubleshooting. A new completed test replaces
+  it; reboot clears it. Results contain no IP, MAC or session token. The private
+  RAM access grant necessarily holds the original session for revalidation and
+  is readable only by root. No accumulated result history is kept.
+- Radio identity is checked at the start and finish; a change is reported. A busy
+  CPU core is reported as a possible limit. This is still a client-to-router test,
+  so CPU/network driver work cannot be eliminated altogether. It is not a test
+  of internet service or a guarantee of maximum radio capacity.
+- The original authenticated CGI transfer operations remain for diagnosis and
+  compatibility; the normal UI uses the direct HTTP path. Uninstall stops the
+  native service. The permanent disclaimer tab remains in LuCI.
 
 ## Build and verification
 

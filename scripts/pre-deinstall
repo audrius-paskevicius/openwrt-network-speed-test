@@ -1,0 +1,6 @@
+#!/bin/sh
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+/etc/init.d/network-speed-test stop
+/etc/init.d/network-speed-test disable
+rm -f /var/run/network-speed-test/payload /var/run/network-speed-test/payload.new /var/run/network-speed-test/grant.json /var/run/network-speed-test/grant.new
+exit 0

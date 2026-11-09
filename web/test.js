@@ -13,13 +13,13 @@ function mount(host,options){
  const setProgress=value=>{const percent=Math.round(value);progress.firstElementChild.style.width=percent+'%';progress.setAttribute('aria-valuenow',percent);progress.title=percent+'%';};
  const output=name=>section.querySelector('[data-result="'+name+'"]');
  const endpoint=options.endpoint||'/cgi-bin/network-speed-test';
- let active=false,cancelled='',controller=null,started=false,disposed=false,measurements={};
+ let active=false,cancelled='',controller=null,started=false,disposed=false,measurements={},sample=null;
  function check(){if(cancelled)throw Error(cancelled);}
  async function request(op,body){
   check();controller=new AbortController();const current=controller;
   const timer=setTimeout(()=>current.abort(),timing.timeoutMs);
   try {
-   const response=await fetch(endpoint+'?op='+op,{method:'POST',credentials:'same-origin',cache:'no-store',headers:Object.assign({Authorization:'Bearer '+options.session},body?{'Content-Type':'application/octet-stream'}:{}),body,signal:current.signal});
+   const response=await fetch(endpoint+'?op='+op,{method:'POST',credentials:options.direct?'omit':'same-origin',cache:'no-store',headers:Object.assign({Authorization:'Bearer '+options.session},body?{'Content-Type':'application/octet-stream'}:{}),body,signal:current.signal});
    if(!response.ok){const data=await response.json().catch(()=>({}));throw Error(data.error||'The router could not complete this request.');}
    const data=await response.json();check();return data;
   } catch(e){check();if(e.name==='AbortError')throw Error('The connection timed out. Try again when the connection is stable.');throw e;}
@@ -31,7 +31,7 @@ function mount(host,options){
   for(let attempt=0;attempt<12;attempt++){
    const c=new AbortController(),timer=setTimeout(()=>c.abort(),3000);
    try{
-    const response=await fetch(endpoint+'?op=finish',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive:true,headers:Object.assign({Authorization:'Bearer '+options.session},measured?{'Content-Type':'application/json'}:{}),body:measured?JSON.stringify(measured):undefined,signal:c.signal});
+    const response=await fetch(endpoint+'?op=finish',{method:'POST',credentials:options.direct?'omit':'same-origin',cache:'no-store',keepalive:true,headers:Object.assign({Authorization:'Bearer '+options.session},measured?{'Content-Type':'application/json'}:{}),body:measured?JSON.stringify(measured):undefined,signal:c.signal});
     if(response.ok){started=false;return await response.json();}
     if(response.status!==409)break;
    }catch(e){break;}finally{clearTimeout(timer);}
@@ -53,7 +53,7 @@ function mount(host,options){
   const current=new AbortController();connectionRequest=current;
   const timer=setTimeout(()=>current.abort(),8000);
   try{
-   const response=await fetch(endpoint+'?op=connection',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{Authorization:'Bearer '+options.session},signal:current.signal});
+   const response=await fetch(endpoint+'?op=connection',{method:'POST',credentials:options.direct?'omit':'same-origin',cache:'no-store',headers:{Authorization:'Bearer '+options.session},signal:current.signal});
    if(!response.ok)throw Error('Radio lookup failed');
    const result=await response.json();
    if(!active&&!disposed)showConnection(result.connection);
@@ -71,7 +71,7 @@ function mount(host,options){
   status.textContent='Measuring download…';controller=new AbortController();const current=controller;
   const timer=setTimeout(()=>current.abort(),timing.timeoutMs);let reader;
   try{
-   const response=await fetch(endpoint+'?op=download',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{Authorization:'Bearer '+options.session},signal:current.signal});
+   const response=await fetch(endpoint+'?op=download',{method:'POST',credentials:options.direct?'omit':'same-origin',cache:'no-store',headers:{Authorization:'Bearer '+options.session},signal:current.signal});
    if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.error||'Download failed.');}
    if(!response.body)throw Error('This browser cannot measure a streaming download.');
    reader=response.body.getReader();let first=null,begin=null,windowStart=0,bytes=0,windowBytes=0,elapsed=0;const samples=[];
@@ -97,9 +97,8 @@ function mount(host,options){
  }
  async function upload(){
   status.textContent='Measuring upload…';
-  const data=new Uint8Array(32*1024*1024),seed=new Uint8Array(65536);
-  if(globalThis.crypto&&crypto.getRandomValues)crypto.getRandomValues(seed);else for(let i=0;i<seed.length;i++)seed[i]=Math.random()*256;
-  for(let i=0;i<data.length;i+=seed.length)data.set(seed,i);
+  const data=new Uint8Array(32*1024*1024);
+  for(let i=0;i<data.length;i+=sample.length)data.set(sample,i);
   let size=65536,begin=null,bytes=0,elapsed=0,rounds=0,busyRetries=0;const warmupStart=performance.now(),samples=[];
   for(;;){
    check();const before=performance.now();let response;
@@ -115,11 +114,19 @@ function mount(host,options){
  }
  async function run(){
   if(active||disposed)return;
+  if(options.launch){
+   active=true;button.disabled=true;status.textContent='Opening local test...';
+   try{await options.launch();}catch(e){status.textContent=e.message;status.classList.add('alert-message','error');}
+   finally{active=false;button.disabled=false;}
+   return;
+  }
   active=true;measurements={};if(connectionRequest)connectionRequest.abort();cancelled='';button.disabled=true;progress.hidden=false;setProgress(0);warning.hidden=true;warning.textContent='';status.classList.remove('alert-message','error');section.setAttribute('aria-busy','true');
   for(const name of ['download','upload','latency'])output(name).textContent='—';
   let succeeded=false;
   try{
-   status.textContent='Preparing test…';const result=await request('start');started=true;showConnection(result.connection);
+   status.textContent='Preparing test…';sample=new Uint8Array(65536);
+   if(globalThis.crypto&&crypto.getRandomValues)crypto.getRandomValues(sample);else for(let i=0;i<sample.length;i++)sample[i]=Math.random()*256;
+   const result=await request('start',options.direct?sample:undefined);started=true;showConnection(result.connection);
    await latency();await download();await upload();check();
    status.textContent='Finishing…';const end=await finish(measurements);check();
    if(!end)throw Error('Could not verify the end of the test. Press Start to repeat it.');

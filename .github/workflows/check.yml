@@ -20,6 +20,8 @@ jobs:
       - run: |
           sh -n scripts/build-apk.sh
           sh -n scripts/post-install
+          sh -n scripts/pre-deinstall
+          sh -n files/network-speed-test.init
           google-chrome --headless=new --no-sandbox --disable-dev-shm-usage --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --user-data-dir="$RUNNER_TEMP/speed-test-chrome" about:blank > "$RUNNER_TEMP/chrome.log" 2>&1 &
           chrome_pid=$!
           trap 'kill "$chrome_pid" 2>/dev/null || true' EXIT

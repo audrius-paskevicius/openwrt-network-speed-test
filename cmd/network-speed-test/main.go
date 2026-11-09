@@ -59,6 +59,8 @@ type lease struct {
 	CPU        map[string]cpuTimes `json:"cpu"`
 }
 type server struct {
+	native         bool
+	payload        string
 	dir            string
 	authorize      func(context.Context, string) bool
 	inspect        func(context.Context, string) connection
@@ -145,18 +147,38 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Use the Speed Test page on this router.")
 		return
 	}
+	op := r.URL.Query().Get("op")
 	sid, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || !validHex(sid, 32) || !s.authorize(r.Context(), sid) {
+	capability := sid
+	allowed := false
+	if s.native {
+		var grant accessGrant
+		if data, err := os.ReadFile(filepath.Join(s.dir, "grant.json")); err == nil && json.Unmarshal(data, &grant) == nil && validHex(capability, 64) && grant.Token == digest(capability) && grant.Peer == peer(r) && grant.Expires.After(s.now()) {
+			sid = grant.Session
+			allowed = op != "prepare" && (op != "start" || s.authorize(r.Context(), sid))
+		}
+	} else {
+		allowed = validHex(sid, 32) && s.authorize(r.Context(), sid)
+	}
+	if !ok || !allowed {
+		if s.native {
+			fail(w, 403, "Test access expired. Return to the router UI and press Start.")
+			return
+		}
 		fail(w, 403, "Your router login has expired or does not allow speed tests. Sign in again.")
 		return
 	}
-	op := r.URL.Query().Get("op")
 	var measured *measurements
-	if op != "connection" && op != "start" && op != "ping" && op != "download" && op != "upload" && op != "finish" {
+	if op != "prepare" && op != "connection" && op != "start" && op != "ping" && op != "download" && op != "upload" && op != "finish" {
 		fail(w, 400, "Unknown test operation.")
 		return
 	}
-	if op == "upload" {
+	if s.native && op == "start" {
+		if r.ContentLength != payloadSize || r.Header.Get("Content-Type") != "application/octet-stream" {
+			fail(w, 400, "A client-generated data sample is required.")
+			return
+		}
+	} else if op == "upload" {
 		if r.ContentLength < 1 || r.ContentLength > maxUpload {
 			fail(w, 413, "Upload must contain 1 byte to 32 MiB.")
 			return
@@ -200,9 +222,32 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "Another transfer is running. Try again shortly.")
 		return
 	}
+	releaseLock := unlock
+	unlock = func() {
+		if releaseLock != nil {
+			releaseLock()
+			releaseLock = nil
+		}
+	}
 	defer unlock()
+	if s.native {
+		var current accessGrant
+		data, err := os.ReadFile(filepath.Join(s.dir, "grant.json"))
+		if err != nil || json.Unmarshal(data, &current) != nil || current.Token != digest(capability) || current.Session != sid {
+			fail(w, 403, "Test access changed. Return to the router UI and press Start.")
+			return
+		}
+		if op == "start" {
+			current.Expires = s.now().Add(30 * time.Minute)
+			data, _ = json.Marshal(current)
+			if os.WriteFile(filepath.Join(s.dir, "grant.new"), data, 0600) != nil || os.Rename(filepath.Join(s.dir, "grant.new"), filepath.Join(s.dir, "grant.json")) != nil {
+				fail(w, 503, "Cannot renew local test access.")
+				return
+			}
+		}
+	}
 	l, leaseError := s.readLease()
-	if op == "start" {
+	if op == "start" || op == "prepare" {
 		if leaseError == nil && l.Expires.After(s.now()) {
 			fail(w, 409, "Another test is running. Wait a moment, then try again.")
 			return
@@ -217,16 +262,40 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		value := hex.EncodeToString(token)
+		if op == "prepare" {
+			grant := accessGrant{Token: digest(value), Session: sid, Peer: peer(r), Expires: s.now().Add(30 * time.Minute)}
+			data, _ := json.Marshal(grant)
+			path := filepath.Join(s.dir, "grant.new")
+			if os.WriteFile(path, data, 0600) != nil || os.Rename(path, filepath.Join(s.dir, "grant.json")) != nil {
+				fail(w, 503, "Cannot prepare local test access.")
+				return
+			}
+			reply(w, 200, map[string]any{"token": value})
+			return
+		}
+		if s.native {
+			value = capability
+			if err := storePayload(s.payload, r.Body); err != nil {
+				fail(w, 400, "The test data sample did not arrive completely.")
+				return
+			}
+		}
 		l = lease{Token: digest(value), Owner: digest(sid), Peer: peer(r), Expires: s.now().Add(runLifetime), Connection: s.inspect(r.Context(), peer(r)), CPU: s.cpu()}
 		if e = s.saveLease(l); e != nil {
 			fail(w, 503, "Cannot prepare test.")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 90})
+		if !s.native {
+			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 90})
+		}
 		reply(w, 200, map[string]any{"connection": l.Connection})
 		return
 	}
 	c, e := r.Cookie(cookieName)
+	if s.native {
+		c = &http.Cookie{Value: capability}
+		e = nil
+	}
 	if leaseError != nil || e != nil || !validHex(c.Value, 64) || !l.Expires.After(s.now()) || l.Token != digest(c.Value) || l.Owner != digest(sid) || l.Peer != peer(r) {
 		fail(w, 409, "This test has expired. Press Start to try again.")
 		return
@@ -235,6 +304,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		reply(w, 200, map[string]bool{"ok": true})
 	case "download":
+		if s.native {
+			s.sendPayload(w, r)
+			return
+		}
 		buffer := make([]byte, 64<<10)
 		if _, e = rand.Read(buffer); e != nil {
 			fail(w, 503, "Cannot prepare test data.")
@@ -257,6 +330,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sent += int64(n)
 		}
 	case "upload":
+		if s.native {
+			receivePayload(w, r, unlock)
+			return
+		}
 		// Read exactly the declared length; do not retain, echo, or write payloads.
 		n, err := io.CopyBuffer(io.Discard, io.LimitReader(r.Body, r.ContentLength), make([]byte, 64<<10))
 		if err != nil || n != r.ContentLength {
@@ -285,7 +362,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 503, "Cannot finish test.")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+		if !s.native {
+			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+		}
 		reply(w, 200, map[string]any{"connection": end, "connection_changed": changed, "router_cpu_busy": peak, "result_saved": saved})
 	}
 }
@@ -459,6 +538,16 @@ func inspect(ctx context.Context, address string) connection {
 	return connection{}
 }
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if len(os.Args) != 3 {
+			os.Exit(2)
+		}
+		if err := serveNative(os.Args[2]); err != nil {
+			os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		return
+	}
 	// A client that disconnects or stops uploading cannot leave a CGI process behind.
 	timer := time.AfterFunc(20*time.Second, func() { os.Exit(1) })
 	defer timer.Stop()

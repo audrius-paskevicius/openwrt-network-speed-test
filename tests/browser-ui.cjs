@@ -23,7 +23,7 @@ async function connect(){
    if(op==='download'){
     const stream=new ReadableStream({start(c){this.timer=setInterval(()=>c.enqueue(new Uint8Array(65536)),2);options.signal.addEventListener('abort',()=>{clearInterval(this.timer);try{c.error(new DOMException('Aborted','AbortError'));}catch(e){}});},cancel(){clearInterval(this.timer);}});return new Response(stream,{headers:{'Content-Type':'application/octet-stream'}});
    }throw Error('Unexpected endpoint');
-  };window.runner=api.mount(document.getElementById('host'),{session:'synthetic-session',timing:{warmupMs:10,minMs:60,maxMs:100,timeoutMs:2000}});`);
+  };window.runner=api.mount(document.getElementById('host'),{session:'synthetic-session',direct:true,timing:{warmupMs:10,minMs:60,maxMs:100,timeoutMs:2000}});`);
   assert.equal(await page.run('document.querySelectorAll("button").length'),1);
   assert.equal(await page.run('document.querySelector("button").textContent'),'Start');
   assert.equal(await page.run('requests.filter(r=>r.op!=="connection").length'),0,'no automatic tests');

@@ -1,5 +1,35 @@
 # Verification
 
+## 0.2.0-r1 - client-generated data and direct kernel transfers
+
+- The phone's prior recorded HTTPS test was 52.5/50.3 Mbps on radio0, 5 GHz,
+  channel 128, without roaming. One core averaged 92% busy (89% user time).
+- Bulk transfers now use a LAN-device-bound native HTTP service. LuCI mints a
+  30-minute, client-bound test capability. The browser navigates with this token
+  in a fragment, removes the fragment immediately, and never passes the LuCI
+  session to the data service. Each new run revalidates the original login.
+- The client generates the 64 KiB reusable sample and upload buffers, chooses
+  measurement duration, measures received/confirmed bytes and renders results.
+  The router retains the sample only in RAM and discards all upload data.
+- All 18 ARM backend tests passed, including real TCP transfer/byte checks,
+  scoped-token isolation, client binding, revocation, expiry, truncated sample
+  handling and Linux locking. The transfer/revocation cycle passed 30 repeats
+  after fixing release of the upload lock before acknowledging its bytes.
+- On-router syscall tracing confirmed sendfile64 for the download and splice
+  for the upload, with no syscall errors. These are real kernel paths, not only
+  an assumption based on the Go source. Unsupported systems retain Go fallbacks.
+- A real browser started on the HTTPS LuCI page and ran the HTTP test with one
+  click. Captured requests verified no LuCI session identifier or cookies went
+  to the data API. A reload did not automatically repeat the test; mobile and
+  desktop layouts fit their viewports and navigation returned to HTTPS.
+- That development computer (72 Mbps Wi-Fi link, radio1, channel 13) measured
+  42.7/38.9 Mbps and 5.2 ms request latency. This does not establish performance
+  on the phone's faster radio. A new phone run is needed for that comparison.
+- The signed APK's 19 payload files were compared against intended source and
+  generated assets. Network, firewall and uhttpd configuration hashes matched
+  before and after installing the direct transfer service. No global TLS or
+  hardware-crypto configuration was changed.
+
 ## 0.1.0-r6 - latest phone test diagnostics
 
 - Completed tests report measured byte counts and durations, plus HTTP latency,

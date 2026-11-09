@@ -71,7 +71,7 @@ func expect(t *testing.T, w *httptest.ResponseRecorder, status int) {
 	}
 }
 func TestAuthenticationEveryOperation(t *testing.T) {
-	for _, op := range []string{"connection", "start", "ping", "download", "upload", "finish"} {
+	for _, op := range []string{"prepare", "connection", "start", "ping", "download", "upload", "finish"} {
 		for _, sid := range []string{"", strings.Repeat("0", 32), strings.Repeat("b", 32), strings.Repeat("A", 32), "../../../etc/passwd"} {
 			f := newFixture(t)
 			expect(t, f.request(op, sid, strings.NewReader("secret")), 403)
