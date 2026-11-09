@@ -1,2 +1,4 @@
 .nst .nst-value{font-variant-numeric:tabular-nums;white-space:nowrap}.nst [hidden]{display:none!important}
 .nst .nst-help{color:#666;margin:1.5em 0}.nst .nst-actions{margin:1em 0}
+
+.nst .table,.nst .cbi-progressbar{width:100%;max-width:28rem}.nst .table{table-layout:fixed}
