@@ -24,7 +24,12 @@
   desktop layouts fit their viewports and navigation returned to HTTPS.
 - That development computer (72 Mbps Wi-Fi link, radio1, channel 13) measured
   42.7/38.9 Mbps and 5.2 ms request latency. This does not establish performance
-  on the phone's faster radio. A new phone run is needed for that comparison.
+  on the phone's faster radio.
+- The next phone run used HTTP on radio2, 5 GHz, channel 52, with no radio change:
+  120.95 Mbps download, 90.36 Mbps upload and 9 ms latency. The busiest core
+  averaged 18% busy. This is close to the user's earlier 113/88 Mbps internet
+  result, but it is not the same radio as the prior 500 Mbps channel-128 test.
+  A matched comparison on radio0/channel 128 remains outstanding.
 - The signed APK's 19 payload files were compared against intended source and
   generated assets. Network, firewall and uhttpd configuration hashes matched
   before and after installing the direct transfer service. No global TLS or
