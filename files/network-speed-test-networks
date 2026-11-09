@@ -1,0 +1,75 @@
+#!/bin/sh
+# Print only selected logical network, kernel device and path type. Never keys.
+. /lib/functions.sh
+valid_name() { case "$1" in ''|*[!a-zA-Z0-9_.-]*) return 1;; esac; }
+contains() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
+device_for() {
+ local status
+ status=$(ubus call "network.interface.$1" status 2>/dev/null) || return
+ [ "$(jsonfilter -s "$status" -e '@.up')" = true ] || return
+ jsonfilter -s "$status" -e '@.l3_device'
+}
+config_load network-speed-test
+config_get_bool auto_vpn main auto_vpn 1
+config_get explicit main vpn_network
+config_get excluded main exclude_network
+trusted_networks='' trusted_devices='' blocked_networks='wan wan6 loopback' blocked_devices='lo'
+default_input='REJECT'
+read_defaults() { config_get default_input "$1" input REJECT; }
+read_zone() {
+ local name networks devices input
+ config_get name "$1" name
+ config_get networks "$1" network
+ config_get devices "$1" device
+ config_get input "$1" input "$default_input"
+ if [ "$name" = wan ]; then
+  blocked_networks="$blocked_networks $networks"
+  blocked_devices="$blocked_devices $devices"
+ elif [ "$input" = ACCEPT ]; then
+  trusted_networks="$trusted_networks $networks"
+  trusted_devices="$trusted_devices $devices"
+ fi
+}
+config_load firewall
+config_foreach read_defaults defaults
+config_foreach read_zone zone
+for network in $blocked_networks; do
+ valid_name "$network" || continue
+ blocked_devices="$blocked_devices $(device_for "$network")"
+done
+seen_devices=''
+select_network() {
+ local network="$1" device proto kind
+ valid_name "$network" || return
+ contains "$blocked_networks $excluded" "$network" && return
+ device=$(device_for "$network")
+ valid_name "$device" || return
+ contains "$blocked_devices $seen_devices" "$device" && return
+ config_get proto "$network" proto
+ kind=vpn
+ if [ "$network" = lan ]; then
+  kind=lan
+ elif contains "$explicit" "$network"; then
+  [ "$proto" != wireguard ] || kind=wireguard
+ else
+  [ "$auto_vpn" = 1 ] || return
+  contains "$trusted_networks" "$network" || contains "$trusted_devices" "$device" || return
+  case "$proto" in
+   wireguard) kind=wireguard;;
+   openvpn|pptp|l2tp|sstp|openconnect) kind=vpn;;
+   *)
+    if [ -r "/sys/class/net/$device/tun_flags" ]; then
+     kind=vpn
+    elif grep -Eq '^DEVTYPE=(wireguard|xfrm)$' "/sys/class/net/$device/uevent" 2>/dev/null; then
+     kind=vpn
+    else
+     return
+    fi;;
+  esac
+ fi
+ seen_devices="$seen_devices $device"
+ printf '%s %s %s\n' "$network" "$device" "$kind"
+}
+config_load network
+config_foreach select_network interface
+exit 0

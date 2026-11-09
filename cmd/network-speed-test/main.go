@@ -25,6 +25,7 @@ const runLifetime = 90 * time.Second
 const cookieName = "network_speed_test_run"
 
 type connection struct {
+	Path      string `json:"path,omitempty"`
 	Radio     string `json:"radio,omitempty"`
 	Interface string `json:"interface,omitempty"`
 	Band      string `json:"band,omitempty"`
@@ -464,6 +465,17 @@ func inspect(ctx context.Context, address string) connection {
 	if net.ParseIP(address) == nil {
 		return connection{}
 	}
+	// A return route through an enabled VPN network identifies a
+	// routed test path; do not pretend it measures a local radio association.
+	networks, _ := command(ctx, "/usr/libexec/network-speed-test-networks")
+	if len(networks) > 0 {
+		route, err := command(ctx, "/sbin/ip", "route", "get", address)
+		if err == nil {
+			if c := vpnConnection(route, networks); c.Path != "" {
+				return c
+			}
+		}
+	}
 	b, e := command(ctx, "/sbin/ip", "neigh", "show", "to", address)
 	if e != nil {
 		return connection{}
@@ -538,6 +550,32 @@ func inspect(ctx context.Context, address string) connection {
 			c.Channel = (freq - 5950) / 5
 		}
 		return c
+	}
+	return connection{}
+}
+
+func vpnConnection(route, networks []byte) connection {
+	words := strings.Fields(string(route))
+	device := ""
+	for i := 0; i+1 < len(words); i++ {
+		if words[i] == "dev" {
+			device = words[i+1]
+			break
+		}
+	}
+	if device == "" {
+		return connection{}
+	}
+	for _, line := range strings.Split(string(networks), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[1] != device || fields[2] == "lan" {
+			continue
+		}
+		label := "VPN connection"
+		if fields[2] == "wireguard" {
+			label = "WireGuard VPN"
+		}
+		return connection{Path: label, Interface: device}
 	}
 	return connection{}
 }

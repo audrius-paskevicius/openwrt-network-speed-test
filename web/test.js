@@ -42,7 +42,8 @@ function mount(host,options){
  }
  function showConnection(c){
   const parts=[];
-  if(c&&c.radio)parts.push(c.radio);
+  if(c&&c.path)parts.push(c.path);
+  else if(c&&c.radio)parts.push(c.radio);
   else if(c&&c.interface)parts.push(c.interface);
   if(c&&c.band)parts.push(c.band);
   if(c&&c.channel)parts.push('Channel '+c.channel);

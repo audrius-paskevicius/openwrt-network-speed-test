@@ -6,22 +6,28 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.27.x'
           cache: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
       - run: go test -race ./...
+      - run: go vet ./...
       - run: node tests/check-js.cjs
       - run: node tests/disclaimer.cjs
+      - run: node tests/check-docs.cjs
+      - run: sh tests/network-discovery.sh
       - run: |
           sh -n scripts/build-apk.sh
           sh -n scripts/post-install
           sh -n scripts/pre-deinstall
           sh -n files/network-speed-test.init
+          sh -n files/network-speed-test-networks
           google-chrome --headless=new --no-sandbox --disable-dev-shm-usage --remote-debugging-address=127.0.0.1 --remote-debugging-port=9223 --user-data-dir="$RUNNER_TEMP/speed-test-chrome" about:blank > "$RUNNER_TEMP/chrome.log" 2>&1 &
           chrome_pid=$!
           trap 'kill "$chrome_pid" 2>/dev/null || true' EXIT
@@ -32,8 +38,20 @@ jobs:
           node tests/browser-ui.cjs
       - run: |
           mkdir -p dist
-          GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o dist/network-speed-test ./cmd/network-speed-test
-      - uses: actions/upload-artifact@v4
+          GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o dist/network-speed-test ./cmd/network-speed-test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: network-speed-test-armv7
           path: dist/network-speed-test
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Scan reachable history for secrets
+        run: |
+          curl --fail --location --silent --show-error https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner

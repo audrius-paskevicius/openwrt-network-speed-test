@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible problem with the speed test.
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities use Security → Report a vulnerability. Remove passwords, tokens, keys, addresses and device identifiers; do not attach raw router configuration or browser captures."
+  - type: input
+    id: version
+    attributes:
+      label: Package and OpenWrt versions
+      placeholder: "Package version, OpenWrt version, router model"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Browser and connection type
+      placeholder: "Browser/version; direct Wi-Fi, Ethernet, or VPN protocol"
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected behaviour and actual behaviour
+      description: Include the exact error and a minimal, sanitised reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitised evidence
+      description: Optional relevant observations or screenshots without private details.

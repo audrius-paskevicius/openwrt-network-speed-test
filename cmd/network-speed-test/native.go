@@ -179,7 +179,8 @@ func serveNative(device string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(path)
+	// Listeners on other trusted interfaces share this RAM sample. Removing it
+	// when just one listener exits could interrupt a run on another interface.
 	s := &server{native: true, payload: path, dir: dir, authorize: authorized, inspect: inspect, cpu: readCPU, lock: lockFile, now: time.Now, streamLimit: maxDownload, streamDuration: 13 * time.Second}
 	listener, err := listenLAN(context.Background(), device, net.JoinHostPort("", nativePort))
 	if err != nil {

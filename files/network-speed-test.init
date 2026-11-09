@@ -2,18 +2,22 @@
 START=95
 USE_PROCD=1
 start_service() {
- local device
- device=$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@.l3_device')
- [ -n "$device" ] || return 1
- procd_open_instance
- procd_set_param command /www/cgi-bin/network-speed-test serve "$device"
- procd_set_param respawn
- procd_set_param stdout 1
- procd_set_param stderr 1
- procd_set_param limits nofile="128 128"
- procd_close_instance
+ local network device kind selected
+ selected=$(/usr/libexec/network-speed-test-networks)
+ while read -r network device kind; do
+  [ -n "$device" ] || continue
+  procd_open_instance "$network"
+  procd_set_param command /www/cgi-bin/network-speed-test serve "$device"
+  procd_set_param respawn
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_set_param limits nofile="128 128"
+  procd_close_instance
+ done <<EOF
+$selected
+EOF
 }
 service_triggers() {
- procd_add_reload_trigger network
- procd_add_interface_trigger "interface.*" lan /etc/init.d/network-speed-test restart
+ procd_add_reload_trigger network firewall network-speed-test
+ procd_add_raw_trigger "interface.*" 1000 /etc/init.d/network-speed-test restart
 }

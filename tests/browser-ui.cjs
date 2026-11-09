@@ -17,7 +17,7 @@ async function connect(){
    const json=(data,status=200)=>Promise.resolve(new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
    if(mode==='denied')return json({error:'Your router login has expired.'},403);
    if(mode==='busy'&&op==='start')return json({error:'Another test is running.'},409);
-   if(op==='connection'||op==='start')return json({connection:{radio:mode==='roamed'?'radio2':'radio0',band:'5 GHz',channel:mode==='roamed'?52:36}});
+   if(op==='connection'||op==='start')return json({connection:mode==='vpn'?{path:'WireGuard VPN',interface:'wg0'}:{radio:mode==='roamed'?'radio2':'radio0',band:'5 GHz',channel:mode==='roamed'?52:36}});
    if(op==='ping')return json({ok:true});
    if(op==='finish')return json({connection_changed:mode==='changed',router_cpu_busy:mode==='changed'?98:20});
    if(op==='upload'){await new Promise(resolve=>setTimeout(resolve,5));return json({bytes:options.body.byteLength-(incomplete?1:0)});}
@@ -32,6 +32,8 @@ async function connect(){
   assert.match(await page.run('document.querySelector(".nst-connection").textContent'),/radio0.*5 GHz.*Channel 36/);
   await page.run('mode="roamed";runner.refreshConnection()');
   assert.match(await page.run('document.querySelector(".nst-connection").textContent'),/radio2.*Channel 52/);
+  await page.run('mode="vpn";runner.refreshConnection()');
+  assert.equal(await page.run('document.querySelector(".nst-connection").textContent'),'WireGuard VPN');
   await page.run('mode="normal"');
   assert.deepEqual(await page.run('[...document.querySelectorAll("[data-result]")].map(x=>x.textContent)'),['—','—','—']);
   await page.run('runner.run()');

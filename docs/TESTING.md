@@ -1,5 +1,48 @@
 # Verification
 
+This is versioned evidence, not a description of every current behaviour.
+Older sections describe superseded workflows and measurements. The current
+implementation is described in [README](../README.md) and
+[architecture](ARCHITECTURE.md). Throughput observations are examples, not
+performance guarantees; test identifiers in source are synthetic fixtures.
+
+## 0.2.2-r1 - VPN support and first public release, 2026-11-09
+
+- Added automatic discovery of trusted VPN interfaces, with individual
+  device-bound listeners, shared global run locks, and VPN path identification.
+  Discovery fixtures cover trusted/untrusted tunnels, TUN, WAN devices/zones,
+  manual overrides, exclusions, down interfaces and disabled automatic discovery.
+
+- Reviewed documentation against the control flow, authentication, measurement
+  timing, RAM files, lifecycle scripts and APK contents. Corrected the timing
+  target and best-effort result-saving description; clarified compatibility
+  endpoints, uninstall leftovers, signing-key trust and browser requirements.
+- Added installation/troubleshooting, security, architecture, contribution and
+  release instructions, a changelog, and automated documentation consistency
+  checks. Measurement arithmetic and authentication are unchanged from 0.2.1-r1.
+- After 0.2.1-r1 installation, the user reported slightly better local results
+  and a pleasant UI. No new numerical result or exact browser version was supplied.
+- Publication checks include backend tests/vet, JS and documentation checks,
+  synthetic browser/disclaimer tests, native ARM tests, signed APK verification,
+  exact package-content comparison and scans of Git history and release files.
+  CI results are available in the repository Actions page.
+- All 22 backend tests passed on Windows and natively on ARM; Go vet, JS checks,
+  browser/disclaimer checks and documentation checks passed. Discovery fixtures
+  passed in the router's BusyBox shell. The signed APK's 26 files matched the
+  intended source/generated contents with no unexpected payload files.
+- Automatic discovery on the target router selected LAN and its existing
+  WireGuard interface; both procd instances were running after installation.
+  Network, firewall and uhttpd configuration hashes were unchanged.
+- Two local HTTPS LuCI runs completed at 44.4/43.4 Mbps with 8.8 ms latency and
+  44.7/37.6 Mbps with 8.0 ms latency. The 48 upload responses used two TCP
+  connections total. No admin session or cookies reached the HTTP endpoint;
+  navigation, reload and mobile/desktop layout checks passed.
+- Gitleaks found no secrets in the development history or extracted APK.
+  Additional checks found no private-key blocks, personal filesystem paths,
+  known deployment password or active test-session identifier in reachable Git
+  objects or the extracted package. These checks are not proof against every
+  possible form of sensitive data.
+
 ## 0.2.1-r1 - HTTPS LuCI with direct HTTP transfers, 2026-11-09
 
 - Start stays in the current LuCI page. Each run obtains a fresh scoped token
@@ -23,8 +66,8 @@
   and no LuCI session token or cookies in HTTP requests. No mixed-content bypass
   flags or browser permission overrides were used; only the existing router's
   self-signed certificate was accepted in the disposable test browser.
-  Reload did not auto-start; 390/1280-pixel layouts were checked. Phone-browser
-  compatibility remains to be checked on the phone itself.
+  Reload did not auto-start; 390/1280-pixel layouts were checked. The user later
+  reported successful use; the exact client/browser version was not recorded.
 - An initial second-run automation timeout was resolved by limiting DevTools
   request-body capture; the subsequent two-run check passed in full.
 - Signed APK verification and comparison of all 19 payload files passed.
