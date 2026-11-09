@@ -10,11 +10,13 @@ or a guarantee that vulnerabilities are absent.
 - The HTTP service accepts a cryptographically random 256-bit test token, tied
   to the client IP and expiry. It cannot use an admin session as a native token.
   Starting a run revalidates the original LuCI permission. Operations are fixed;
-  there is no arbitrary command, file-upload or router-administration API.
+  there is no arbitrary command execution, user-selected filesystem write or
+  router-administration API. The sample is written only to the fixed RAM path.
 - Cross-origin responses allow only the exact origin that prepared the current
   client-bound grant. No wildcard origin or credentialed CORS is enabled.
-  Preflight alone grants no permission to transfer data. Same-origin native
-  pages and non-browser clients still need a valid token.
+  Preflight alone grants no permission to transfer data. API calls from
+  same-origin native pages and non-browser clients still need a valid token;
+  the static test page and styling assets can be fetched without authentication.
 - Listener sockets are bound to selected LAN/VPN devices. Automatic VPN
   discovery follows existing trusted firewall-zone input policy. No firewall,
   web-server TLS, or VPN configuration is modified. See the precise discovery

@@ -30,9 +30,12 @@ building another target does not establish that it works on that router.
 Generate your own signing key outside the source tree for custom packages:
 
 ```sh
+umask 077
+mkdir -p /private/my-speed-test-keys
 openssl genrsa -out /private/my-speed-test.pem 4096
-openssl rsa -in /private/my-speed-test.pem -pubout -out /private/my-speed-test-public.pem
+openssl rsa -in /private/my-speed-test.pem -pubout -out /private/my-speed-test-keys/my-speed-test-public.pem
 SIGN_KEY=/private/my-speed-test.pem APK_TOOL=/path/to/apk.static sh scripts/build-apk.sh
+apk --keys-dir /private/my-speed-test-keys verify dist/luci-app-network-speed-test-$(cat VERSION).apk
 ```
 
 Verify custom packages with the matching custom public key directory. The
@@ -59,6 +62,12 @@ repository public key is for official release verification, not custom builds.
 6. Publish a GitHub release with those five assets, clear target/installation
    notes, changes, verification evidence and limitations. Confirm checks on the
    published commit, and download assets again to verify their hashes.
+
+Documentation corrections and new verification evidence can be committed after
+a release without changing application code or `VERSION`. Update the live release
+notes when relevant, but keep published tags, APKs, source archives and checksums
+as immutable snapshots. To distribute revised bundled documentation in an APK,
+increment its package revision and publish a new release snapshot.
 
 Report ordinary bugs through Issues using sanitised examples. Follow
 [SECURITY.md](SECURITY.md) for vulnerabilities. Contributions do not create a

@@ -1,5 +1,12 @@
 # Changelog
 
+## Documentation updates after 0.2.2-r1 — 2026-11-09
+
+- Record the completed external WireGuard test and its saved measurements.
+- Clarify discovery limits, connection-change detection and static/API access.
+- Correct custom-build verification to use the matching custom signing key.
+- Distinguish live documentation updates from immutable release snapshots.
+
 ## 0.2.2-r1 — 2026-11-09
 
 First public release.

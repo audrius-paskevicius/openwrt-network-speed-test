@@ -33,6 +33,11 @@ netifd status and device metadata, and emits only logical name, device and kind.
 It recognises WireGuard and named VPN protocols (OpenVPN, PPTP, L2TP, SSTP,
 OpenConnect), plus TUN/TAP devices and WireGuard/XFRM device types. This is
 detection, not a recommendation of every protocol's security.
+Trust matching uses exact logical-network or device names from firewall zones;
+device-name wildcards and individual per-port accept rules are not interpreted.
+A zone without an explicit input policy inherits the configured default input
+policy for this check (falling back to `REJECT`). Existing firewall rules still
+decide whether a connection can reach a selected listener.
 
 Defaults reject `wan`, `wan6`, `loopback`, networks in the zone named `wan`,
 their currently active devices, and loopback. Devices are deduplicated. An
@@ -57,8 +62,9 @@ config settings 'main'
 
 `vpn_network` explicitly selects a trusted network even if automatic detection
 does not recognise it; WAN exclusions still apply. `exclude_network` takes
-precedence. Set `auto_vpn` to `0` for LAN plus explicit VPN entries only, then
-restart `/etc/init.d/network-speed-test`. Defaults contain no private network
+precedence, including when excluding `lan`. Set `auto_vpn` to `0` for LAN plus
+explicit VPN entries only, then run `/etc/init.d/network-speed-test restart`.
+Defaults contain no private network
 names. Existing firewall input restrictions still apply to explicit entries.
 Device-only VPNs need a logical netifd interface; policy-based IPsec without a
 tunnel interface is not automatically supported. Bridged VPN clients may be
@@ -89,7 +95,9 @@ Hiding/leaving the page cancels; loss of connectivity may leave a lease until ex
 
 CPU percentages are deltas from `/proc/stat`, averaged over the run. The UI warns
 at 90% on the busiest core. They are not instantaneous CPU peaks or load averages.
-Radio/path changes are flagged when a known starting interface differs at finish.
+When the starting interface is known, a change in any recorded connection field
+(path, interface, radio, band or channel) at finish is flagged. A missing starting
+interface does not establish a baseline for change detection.
 
 ## RAM state and compatibility
 
@@ -103,7 +111,8 @@ history and no upload retention. Reboot clears these RAM files.
 Each new preparation replaces the idle grant, expires after 30 minutes, and is
 rejected during an active run. Standalone HTTP-page Start renews its grant after
 revalidating the LuCI session. The normal LuCI page obtains a fresh grant instead.
-An already active run can continue until finish/expiry after a session is revoked.
+An already active native HTTP run can continue until finish/expiry after a
+session is revoked; the compatibility CGI path rechecks the session on every request.
 
 The standalone HTTP page and original authenticated CGI data operations remain
 for compatibility/diagnostics. LuCI does not navigate to the standalone page.

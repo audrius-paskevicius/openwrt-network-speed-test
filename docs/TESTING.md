@@ -6,6 +6,24 @@ implementation is described in [README](../README.md) and
 [architecture](ARCHITECTURE.md). Throughput observations are examples, not
 performance guarantees; test identifiers in source are synthetic fixtures.
 
+## Post-release verification and documentation review, 2026-11-09
+
+- The user completed an external WireGuard test and confirmed the
+  `WireGuard VPN` label. The saved result independently showed that path at
+  both start and finish, with no connection change: 56.1 Mbps download,
+  11.3 Mbps upload and 99.8 ms HTTP latency. The busiest router core averaged
+  13% busy. These values describe that VPN path and run, not maximum capacity.
+- This confirms one real external WireGuard path using a local hostname
+  resolving to the router's private address. Other VPN protocols have discovery
+  fixture coverage, not equivalent end-to-end verification. The exact external
+  client/browser version was not recorded.
+- Reviewed the README, architecture, security, build/release instructions and
+  changelog against the current code. Clarified signing-key verification,
+  exact-match VPN discovery, connection-change detection and the difference
+  between a versioned release snapshot and later documentation updates.
+- Public evidence includes only rounded measurements and path type; it omits
+  client addresses, private interface names, credentials and session identifiers.
+
 ## 0.2.2-r1 - VPN support and first public release, 2026-11-09
 
 - Added automatic discovery of trusted VPN interfaces, with individual

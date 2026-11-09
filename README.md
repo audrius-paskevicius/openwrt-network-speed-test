@@ -36,8 +36,7 @@ The page uses native LuCI tables, buttons, progress bars and messages, following
 the active router theme. The LuCI page stays open over HTTPS while the bulk test
 traffic goes directly over local HTTP, avoiding TLS work on the router.
 
-Results are practical
-measurements of the complete client-to-router path, not a guarantee of maximum
+Results are practical measurements of the complete client-to-router path, not a guarantee of maximum
 radio capacity. Browser, client, router CPU, signal and competing traffic can
 limit throughput. A wired client measures its Ethernet path. Latency is HTTP
 request/response latency, including router processing, rather than ICMP ping.
@@ -71,6 +70,9 @@ Connect the VPN, then open LuCI using the router's private address or a name
 resolving to it (including a local single-label hostname). The service follows
 existing firewall input permissions. See [VPN discovery and overrides](docs/ARCHITECTURE.md#interfaces-and-vpn-discovery)
 for supported interface types and uncommon configurations.
+An external WireGuard run has been confirmed end to end, including the VPN label;
+see [verification evidence](docs/TESTING.md). Other VPN types have not received
+the same end-to-end verification.
 
 An upgrade uses the same `apk add` command with the newer package. To remove:
 
@@ -98,8 +100,9 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
 - LuCI handles the normal router login and disclaimer. Start keeps the current
   LuCI page open, including HTTPS, while transferring test data directly over
   local HTTP using a random, client-bound capability. The router password
-  and LuCI session token are never passed to the HTTP test service. Its token can only run
-  speed tests, expires after 30 minutes, and cannot mint other tokens or access
+  and LuCI session token are never passed to the HTTP test service. Its token
+  permits test operations and connection lookup, expires after 30 minutes,
+  and cannot mint other tokens or access
   router administration. Starting a new run rechecks the original LuCI session.
 - HTTPS-to-HTTP requests require a browser with the Local Network Access
   mixed-content exception (tested in desktop Chrome 157). Allow local network
@@ -111,14 +114,15 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
   bytes and elapsed time, chooses test lengths, calculates throughput and
   latency, and renders results. Reloading the test page does not run a test.
 - A native HTTP service listens on port 18080, with one instance bound to each
-  selected LAN/VPN device using Linux SO_BINDTODEVICE. No firewall rule or global web-server setting is
-  changed. It serves the test and public LuCI styling assets; all measurement
+  selected LAN/VPN device using Linux SO_BINDTODEVICE. No firewall rule or global
+  web-server setting is changed. It serves the test and public LuCI styling assets; all measurement
   operations require the scoped token and matching client address.
 - The data sample lives in OpenWrt RAM storage, not flash. Downloads reuse this
   file via Linux sendfile. Uploads drain the small initial HTTP buffer, then use
   Go's Linux splice path from the TCP socket to /dev/null. The socket then
-  returns to the HTTP server so consecutive uploads retain their TCP connection. There is no payload
-  encryption, CGI pipe relay, per-packet generation or retained upload data in
+  returns to the HTTP server so consecutive uploads retain their TCP connection.
+  There is no application-level payload encryption, CGI pipe relay, per-packet
+  generation or retained upload data in
   the normal test path. Go has safe copy fallbacks where a kernel path is absent.
 - Each direction warms up for at least a second and targets six to ten seconds
   of measurement (an in-flight upload block may extend that target),
@@ -129,8 +133,8 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
   before/after, transport and CPU diagnostics in RAM for troubleshooting. A
   successfully saved test replaces it; reboot clears it. Saving can fail without
   invalidating the result displayed in the browser. Results contain no IP, MAC
-  or session token. The private
-  RAM access grant necessarily holds the original session for revalidation and
+  or session token. The private RAM access grant necessarily holds the original
+  session for revalidation and
   is readable only by root. No accumulated result history is kept.
 - Radio identity is checked at the start and finish; a change is reported. A busy
   CPU core is reported as a possible limit. This is still a client-to-router test,
@@ -148,12 +152,15 @@ remains for compatibility and is no longer opened by LuCI.
 ## Troubleshooting
 
 - **Local connection blocked:** use a browser supporting the local-network
-  mixed-content exception; desktop Chrome 157 was tested, and the user also
-  reported success with the updated UI. Check the router page's local-network permission
-  and that the test service is running on the selected LAN/VPN path. Do not disable browser security or
-  expose port 18080 to the internet to work around this.
+  mixed-content exception; desktop Chrome 157 was tested. Check the router page's
+  local-network permission and that the test service is running on the selected
+  LAN/VPN path. Do not disable browser security or expose port 18080 to the
+  internet to work around this.
+- **VPN not discovered:** check that the VPN has an active logical netifd
+  interface and matches the documented discovery rules. An explicit trusted
+  network override can cover unusual setups; it does not open firewall ports.
 - **Another test is running:** let that test finish. An abandoned run expires
-  after 90 seconds; returning to the page and pressing Start obtains fresh access.
+  90 seconds after it started; returning to the page and pressing Start obtains fresh access.
 - **Radio unavailable:** wired clients, routed paths, mesh/extender clients or
   unavailable neighbour/hostapd data may not identify a direct radio association.
 - **Unexpected throughput:** check the displayed radio/channel and repeat under
@@ -182,8 +189,8 @@ node tests/check-docs.cjs
 sh tests/network-discovery.sh
 mkdir -p dist
 GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o dist/network-speed-test ./cmd/network-speed-test
-SIGN_KEY=/private/signing.pem APK_TOOL=/path/to/apk.static sh scripts/build-apk.sh
-apk --keys-dir "$(pwd)/release" verify dist/luci-app-network-speed-test-$(cat VERSION).apk
+SIGN_KEY=/private/my-speed-test.pem APK_TOOL=/path/to/apk.static sh scripts/build-apk.sh
+apk --keys-dir /private/my-speed-test-keys verify dist/luci-app-network-speed-test-$(cat VERSION).apk
 ```
 
 `node tests/browser-ui.cjs` uses a disposable Chrome with remote debugging on
@@ -192,8 +199,8 @@ tests cover authentication, request methods/origin, byte bounds, incomplete
 uploads, expiry, exclusivity, disconnects and connection-change reporting.
 
 The repository public key verifies the maintainer's releases. For your own
-build, generate a separate signing key and use its matching public key when
-verifying/installing; see [contributing and release steps](CONTRIBUTING.md).
+build, first generate a separate signing key and its public verification-key
+directory as shown in [contributing and release steps](CONTRIBUTING.md).
 No Wi-Fi, network or firewall configuration is changed by package installation.
 
 Only tracked sources belong in a public source archive. `.private/`, `.tools/`,
@@ -202,3 +209,7 @@ Only tracked sources belong in a public source archive. `.private/`, `.tools/`,
 See the [changelog](CHANGELOG.md) for releases. Report reproducible bugs through
 [GitHub Issues](https://github.com/audrius-paskevicius/openwrt-network-speed-test/issues);
 follow [SECURITY.md](SECURITY.md) for vulnerabilities.
+
+Release APKs and source ZIPs are snapshots of their tagged commit. Documentation
+on the main branch can contain later corrections and verification evidence;
+see the documentation section of the [changelog](CHANGELOG.md).
