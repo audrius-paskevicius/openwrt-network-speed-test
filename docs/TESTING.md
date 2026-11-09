@@ -29,7 +29,14 @@
   120.95 Mbps download, 90.36 Mbps upload and 9 ms latency. The busiest core
   averaged 18% busy. This is close to the user's earlier 113/88 Mbps internet
   result, but it is not the same radio as the prior 500 Mbps channel-128 test.
-  A matched comparison on radio0/channel 128 remains outstanding.
+- A subsequent phone run on radio0, 5 GHz, channel 128, stayed on that radio
+  and measured 371.52 Mbps download, 390.53 Mbps upload and 8.3 ms latency over
+  HTTP. The busiest core averaged 41% busy (35% soft interrupts, 4% system,
+  1% user); the other core recorded 10% system and 13% user time. The earlier
+  HTTPS run on that radio measured 52.54/50.26 Mbps with a 92%-busy core.
+  Throughput improved about 7.1x down / 7.8x up, with considerably more CPU
+  headroom. Download remains below the user's approximate 500 Mbps internet
+  result; these observations do not establish the cause of that remaining gap.
 - The signed APK's 19 payload files were compared against intended source and
   generated assets. Network, firewall and uhttpd configuration hashes matched
   before and after installing the direct transfer service. No global TLS or
