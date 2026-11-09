@@ -44,11 +44,18 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
 
 ## Operation
 
-- LuCI handles the normal router login and disclaimer. Start opens the local
-  HTTP test page using a random, client-bound capability. The router password
-  and LuCI session token are never passed to that page. Its token can only run
+- LuCI handles the normal router login and disclaimer. Start keeps the current
+  LuCI page open, including HTTPS, while transferring test data directly over
+  local HTTP using a random, client-bound capability. The router password
+  and LuCI session token are never passed to the HTTP test service. Its token can only run
   speed tests, expires after 30 minutes, and cannot mint other tokens or access
   router administration. Starting a new run rechecks the original LuCI session.
+- HTTPS-to-HTTP requests require a browser with the Local Network Access
+  mixed-content exception (tested in desktop Chrome 157). Allow local network
+  access if prompted. Unsupported browsers show an error without redirecting
+  or silently changing the measurement to HTTPS. CORS permits only the exact
+  LuCI origin that issued the current client-bound grant; cookies are omitted
+  from transfer requests. Idle radio lookup stays on the LuCI connection.
 - The browser supplies a 1 MiB data sample, generates upload buffers, measures
   bytes and elapsed time, chooses test lengths, calculates throughput and
   latency, and renders results. Reloading the test page does not run a test.

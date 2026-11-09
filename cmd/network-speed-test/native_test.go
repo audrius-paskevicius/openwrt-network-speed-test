@@ -51,12 +51,16 @@ func TestNativeTransfersAndRevocation(t *testing.T) {
 		t.Helper()
 		r, _ := http.NewRequest("POST", base+"?op="+op, bytes.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Origin", control.URL)
 		if body != nil {
 			r.Header.Set("Content-Type", "application/octet-stream")
 		}
 		response, err := http.DefaultClient.Do(r)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if base != control.URL && response.Header.Get("Access-Control-Allow-Origin") != control.URL {
+			t.Fatal("native response, including hijacked upload, must retain CORS headers")
 		}
 		return response
 	}

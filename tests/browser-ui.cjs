@@ -12,7 +12,8 @@ async function connect(){
  const page=await connect();try{
   await page.call('Page.setDocumentContent',{frameId:(await page.call('Page.getFrameTree')).frameTree.frame.id,html:'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="host"></div></body></html>'});
   await page.run(`document.head.append(Object.assign(document.createElement('style'),{textContent:${JSON.stringify(fs.readFileSync('web/style.css','utf8'))}}));window.api=new Function('baseclass',${JSON.stringify(fs.readFileSync('web/test.js','utf8'))})({extend:x=>x});window.requests=[];window.mode='normal';window.incomplete=false;window.fetch=async(url,options)=>{
-   const op=new URL(url,'http://fixture.test').searchParams.get('op');requests.push({op,method:options.method,authorization:options.headers.Authorization,bytes:options.body?.byteLength||0,measurement:op==='finish'&&options.body?JSON.parse(options.body):null});
+   const op=new URL(url,'http://fixture.test').searchParams.get('op');requests.push({op,url,credentials:options.credentials,method:options.method,authorization:options.headers.Authorization,bytes:options.body?.byteLength||0,measurement:op==='finish'&&options.body?JSON.parse(options.body):null});
+   if(mode==='blocked'&&op!=='connection')throw new TypeError('Failed to fetch');
    const json=(data,status=200)=>Promise.resolve(new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
    if(mode==='denied')return json({error:'Your router login has expired.'},403);
    if(mode==='busy'&&op==='start')return json({error:'Another test is running.'},409);
@@ -52,6 +53,19 @@ async function connect(){
   await page.run('incomplete=false;window.running=runner.run();runner.run();setTimeout(()=>{Object.defineProperty(document,"hidden",{configurable:true,value:true});document.dispatchEvent(new Event("visibilitychange"));},25);running');
   assert.match(await page.run('document.querySelector(".nst-status").textContent'),/interrupted/);
   assert.equal(await page.run('document.querySelector("button").disabled'),false);
-  console.log('PASS: one-button UI, automatic timing, byte confirmation, authenticated requests, mobile layouts, changed-radio/CPU notices, errors, duplicate guard and hidden-page interruption');
+  await page.run(`Object.defineProperty(document,'hidden',{configurable:true,value:false});document.getElementById('host').remove();const h=document.createElement('div');document.body.append(h);window.preparations=0;mode='normal';requests=[];window.runner=api.mount(h,{session:'admin-session',prepare:async()=>{preparations++;return {session:'scoped-token-'+preparations,endpoint:'http://router.test:18080/api',direct:true};},timing:{warmupMs:10,minMs:60,maxMs:100,timeoutMs:2000}});`);
+  assert.equal(await page.run('preparations'),0);
+  await page.run('runner.run()');
+  assert.equal(await page.run('document.querySelector(".nst-status").textContent'),'Complete.');
+  assert.equal(await page.run('requests.filter(r=>r.op!=="connection").every(r=>r.url.startsWith("http://router.test:18080/api")&&r.authorization==="Bearer scoped-token-1"&&r.credentials==="omit")'),true);
+  await page.run('runner.refreshConnection()');
+  assert.equal(await page.run('requests.filter(r=>r.op==="connection").every(r=>r.authorization==="Bearer admin-session"&&r.credentials==="same-origin")'),true);
+  await page.run('mode="blocked";runner.run()');
+  assert.match(await page.run('document.querySelector(".nst-status").textContent'),/Allow local network access/);
+  assert.equal(await page.run('document.querySelector("button").disabled'),false);
+  await page.run('mode="normal";runner.run()');
+  assert.equal(await page.run('preparations'),3);
+  assert.equal(await page.run('document.querySelector(".nst-status").textContent'),'Complete.');
+  console.log('PASS: one-button UI, timing, byte confirmation, layouts, errors, cancellation, scoped HTTP transfers with separate control credentials, fresh grants and blocked-browser recovery');
  }finally{await page.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

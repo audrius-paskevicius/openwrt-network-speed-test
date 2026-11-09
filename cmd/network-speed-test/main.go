@@ -135,6 +135,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	if s.native && !s.allowNativeOrigin(w, r) {
+		return
+	}
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		fail(w, 405, "Use Start on the LuCI Speed Test page.")
@@ -144,7 +147,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+r.Host {
+	if origin := r.Header.Get("Origin"); !s.native && origin != "" && origin != scheme+"://"+r.Host {
 		fail(w, 403, "Use the Speed Test page on this router.")
 		return
 	}
@@ -264,7 +267,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		value := hex.EncodeToString(token)
 		if op == "prepare" {
-			grant := accessGrant{Token: digest(value), Session: sid, Peer: peer(r), Expires: s.now().Add(30 * time.Minute)}
+			grant := accessGrant{Origin: scheme + "://" + r.Host, Token: digest(value), Session: sid, Peer: peer(r), Expires: s.now().Add(30 * time.Minute)}
 			data, _ := json.Marshal(grant)
 			path := filepath.Join(s.dir, "grant.new")
 			if os.WriteFile(path, data, 0600) != nil || os.Rename(path, filepath.Join(s.dir, "grant.json")) != nil {

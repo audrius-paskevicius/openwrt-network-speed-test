@@ -1,5 +1,36 @@
 # Verification
 
+## 0.2.1-r1 - HTTPS LuCI with direct HTTP transfers, 2026-11-09
+
+- Start stays in the current LuCI page. Each run obtains a fresh scoped token
+  over the LuCI connection, then sends the test data directly to LAN port 18080.
+  Idle radio lookup continues using the original LuCI connection and session.
+- Cross-origin access is restricted to the exact origin stored by authenticated
+  preparation, the same client IP, and an unexpired grant. Preflight permits
+  only POST with Authorization/Content-Type; it grants no test access itself.
+  Actual operations still validate the token, and Start rechecks LuCI access.
+  Upload responses preserve these headers through the kernel splice path.
+- Go tests and vet, JS syntax checks, browser fixtures and disclaimer checks
+  passed. All 21 tests passed natively on ARM. Tests cover wrong origin/client,
+  expired grants, admin session rejection on the native API, revoked sessions,
+  cross-origin downloads/uploads, fresh preparation on retry, browser blocking,
+  and separation of control credentials from HTTP transfer tokens.
+- Desktop Chrome 157 completed two consecutive real runs without navigation:
+  radio1, 2.4 GHz, channel 13; 40.6/38.0 Mbps and 8.3 ms, then 40.8/36.9 Mbps
+  and 8.8 ms. All 40 upload responses used two TCP connections total. These
+  figures reflect this PC's limited Wi-Fi adapter, not the phone's faster radio.
+- Browser network events confirmed direct HTTP payloads, exact HTTPS CORS origin,
+  and no LuCI session token or cookies in HTTP requests. No mixed-content bypass
+  flags or browser permission overrides were used; only the existing router's
+  self-signed certificate was accepted in the disposable test browser.
+  Reload did not auto-start; 390/1280-pixel layouts were checked. Phone-browser
+  compatibility remains to be checked on the phone itself.
+- An initial second-run automation timeout was resolved by limiting DevTools
+  request-body capture; the subsequent two-run check passed in full.
+- Signed APK verification and comparison of all 19 payload files passed.
+  Installed service rejects unauthorised requests and unrelated-origin
+  preflights. Network, firewall and uhttpd configuration checksums are unchanged.
+
 ## 0.2.0-r2 - retain TCP connections and reduce block overhead
 
 - Native uploads now return their hijacked sockets to the HTTP server after

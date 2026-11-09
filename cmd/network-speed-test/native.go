@@ -15,6 +15,7 @@ import (
 )
 
 type accessGrant struct {
+	Origin  string    `json:"origin"`
 	Token   string    `json:"token_hash"`
 	Session string    `json:"session"`
 	Peer    string    `json:"peer"`
@@ -128,7 +129,12 @@ func receivePayload(w http.ResponseWriter, r *http.Request, release func(), recy
 	if status == 200 && !r.Close && r.ProtoMajor == 1 && r.ProtoMinor == 1 && recycle != nil {
 		connection = "keep-alive"
 	}
-	fmt.Fprintf(buffer.Writer, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n", status, http.StatusText(status), connection, len(body))
+	fmt.Fprintf(buffer.Writer, "HTTP/1.1 %d %s\r\n", status, http.StatusText(status))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Connection", connection)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Write(buffer.Writer)
+	buffer.Writer.WriteString("\r\n")
 	buffer.Writer.Write(body)
 	if buffer.Writer.Flush() == nil && connection == "keep-alive" {
 		pending, _ := buffer.Reader.Peek(buffer.Reader.Buffered())
