@@ -97,7 +97,7 @@ function mount(host,options){
  }
  async function upload(){
   status.textContent='Measuring upload…';
-  const data=new Uint8Array(32*1024*1024);
+  const data=new Uint8Array(64*1024*1024);
   for(let i=0;i<data.length;i+=sample.length)data.set(sample,i);
   let size=65536,begin=null,bytes=0,elapsed=0,rounds=0,busyRetries=0;const warmupStart=performance.now(),samples=[];
   for(;;){
@@ -109,7 +109,7 @@ function mount(host,options){
    if(begin!==null){bytes+=size;elapsed=now-begin;samples.push(size*8/duration/1000);output('upload').textContent=(bytes*8/elapsed/1000).toFixed(1);setProgress(50+Math.min(45,elapsed/timing.maxMs*45));}
    if(begin===null&&now-warmupStart>=timing.warmupMs&&rounds>=2)begin=now;
    if(begin!==null&&finished(elapsed,samples,timing)){measurements.upload_bytes=bytes;measurements.upload_ms=elapsed;break;}
-   size=Math.max(65536,Math.min(data.length,size*4,Math.round(size/Math.max(1,duration)*750/65536)*65536));
+   size=Math.max(65536,Math.min(data.length,size*4,Math.round(size/Math.max(1,duration)*1250/65536)*65536));
   }
  }
  async function run(){
@@ -124,8 +124,8 @@ function mount(host,options){
   for(const name of ['download','upload','latency'])output(name).textContent='—';
   let succeeded=false;
   try{
-   status.textContent='Preparing test…';sample=new Uint8Array(65536);
-   if(globalThis.crypto&&crypto.getRandomValues)crypto.getRandomValues(sample);else for(let i=0;i<sample.length;i++)sample[i]=Math.random()*256;
+   status.textContent='Preparing test…';sample=new Uint8Array(options.direct?1024*1024:65536);
+   if(globalThis.crypto&&crypto.getRandomValues){for(let offset=0;offset<sample.length;offset+=65536)crypto.getRandomValues(sample.subarray(offset,offset+65536));}else for(let i=0;i<sample.length;i++)sample[i]=Math.random()*256;
    const result=await request('start',options.direct?sample:undefined);started=true;showConnection(result.connection);
    await latency();await download();await upload();check();
    status.textContent='Finishing…';const end=await finish(measurements);check();

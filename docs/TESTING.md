@@ -1,5 +1,30 @@
 # Verification
 
+## 0.2.0-r2 - retain TCP connections and reduce block overhead
+
+- Native uploads now return their hijacked sockets to the HTTP server after
+  confirmation instead of closing TCP after every block. Authentication still
+  applies to every request. Tests cover repeated uploads, pipelined bytes,
+  invalid tokens on reused sockets, and listener shutdown.
+- The browser-generated download sample increased from 64 KiB to 1 MiB, reducing
+  file seek/send iterations. Uploads adapt towards 1.25-second blocks, bounded
+  to 64 MiB. The server also accepts the older 64 KiB sample for existing pages.
+- All 20 native ARM tests passed. The connection reuse/pipelining test passed
+  30 repetitions. Router tracing again confirmed sendfile64 and splice without
+  syscall errors. The signed APK's 19 files matched intended contents.
+- A real browser completed 10 upload requests using one TCP connection, retained
+  the HTTPS LuCI-to-HTTP scoped-token handoff, and exposed no admin session or
+  cookies to the data API. Mobile layout and no automatic rerun on reload passed.
+- The phone's radio0/channel-128 run measured 370.22 Mbps download, 490.46 Mbps
+  upload and 5.3 ms latency, without roaming. The busiest core averaged 45% busy;
+  its soft-interrupt time was 43%. Upload rose from 390.53 Mbps; download was
+  essentially unchanged from 371.52 Mbps in the preceding version.
+- The user then measured Google Search's Hamburg test at 388/462 Mbps and 27 ms,
+  versus their previous 413/419 Mbps. The latest local result is about 4.6% lower
+  downstream and 6.2% higher upstream. Separate runs vary; these results do not
+  demonstrate a fixed remaining deficit or prove a maximum radio capacity.
+- Network, uhttpd and firewall configuration hashes remained unchanged.
+
 ## 0.2.0-r1 - client-generated data and direct kernel transfers
 
 - The phone's prior recorded HTTPS test was 52.5/50.3 Mbps on radio0, 5 GHz,

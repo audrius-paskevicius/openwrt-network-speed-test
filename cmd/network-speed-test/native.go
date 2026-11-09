@@ -22,7 +22,7 @@ type accessGrant struct {
 }
 
 const nativePort = "18080"
-const payloadSize = 64 << 10
+const payloadSize = 1 << 20
 
 func preparePayload(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -32,12 +32,12 @@ func preparePayload(dir string) (string, error) {
 	return path, nil
 }
 
-func storePayload(path string, source io.Reader) error {
+func storePayload(path string, source io.Reader, size int64) error {
 	f, err := os.OpenFile(path+".new", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
-	_, err = io.CopyN(f, source, payloadSize)
+	_, err = io.CopyN(f, source, size)
 	closeErr := f.Close()
 	if err != nil {
 		os.Remove(path + ".new")
@@ -81,7 +81,7 @@ func (s *server) sendPayload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func receivePayload(w http.ResponseWriter, r *http.Request, release func()) {
+func receivePayload(w http.ResponseWriter, r *http.Request, release func(), recycle func(net.Conn, []byte) bool) {
 	sink, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
 		fail(w, 503, "Cannot receive test data.")
@@ -97,7 +97,12 @@ func receivePayload(w http.ResponseWriter, r *http.Request, release func()) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	reused := false
+	defer func() {
+		if !reused {
+			conn.Close()
+		}
+	}()
 	_ = conn.SetDeadline(time.Now().Add(18 * time.Second))
 	// Drain only bytes already buffered with the request headers, then let Go use
 	// Linux splice from the TCP socket through a kernel pipe into /dev/null.
@@ -119,9 +124,16 @@ func receivePayload(w http.ResponseWriter, r *http.Request, release func()) {
 	// Release before publishing the response so the next upload can start as
 	// soon as the browser receives confirmation of this one.
 	release()
-	fmt.Fprintf(buffer.Writer, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", status, http.StatusText(status), len(body))
+	connection := "close"
+	if status == 200 && !r.Close && r.ProtoMajor == 1 && r.ProtoMinor == 1 && recycle != nil {
+		connection = "keep-alive"
+	}
+	fmt.Fprintf(buffer.Writer, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n", status, http.StatusText(status), connection, len(body))
 	buffer.Writer.Write(body)
-	buffer.Writer.Flush()
+	if buffer.Writer.Flush() == nil && connection == "keep-alive" {
+		pending, _ := buffer.Reader.Peek(buffer.Reader.Buffered())
+		reused = recycle(conn, append([]byte(nil), pending...))
+	}
 }
 
 func nativeHandler(s *server, assets string) http.Handler {
@@ -167,6 +179,8 @@ func serveNative(device string) error {
 	if err != nil {
 		return err
 	}
+	pool := newReuseListener(listener)
+	s.recycle = pool.recycle
 	httpServer := &http.Server{Handler: nativeHandler(s, "/usr/share/network-speed-test"), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8192}
-	return httpServer.Serve(listener)
+	return httpServer.Serve(pool)
 }

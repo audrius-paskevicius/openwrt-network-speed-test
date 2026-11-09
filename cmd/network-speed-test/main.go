@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const maxUpload = 32 << 20
+const maxUpload = 64 << 20
 const maxDownload = 2 << 30
 const runLifetime = 90 * time.Second
 const cookieName = "network_speed_test_run"
@@ -59,6 +59,7 @@ type lease struct {
 	CPU        map[string]cpuTimes `json:"cpu"`
 }
 type server struct {
+	recycle        func(net.Conn, []byte) bool
 	native         bool
 	payload        string
 	dir            string
@@ -174,13 +175,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.native && op == "start" {
-		if r.ContentLength != payloadSize || r.Header.Get("Content-Type") != "application/octet-stream" {
+		if (r.ContentLength != payloadSize && r.ContentLength != 64<<10) || r.Header.Get("Content-Type") != "application/octet-stream" {
 			fail(w, 400, "A client-generated data sample is required.")
 			return
 		}
 	} else if op == "upload" {
 		if r.ContentLength < 1 || r.ContentLength > maxUpload {
-			fail(w, 413, "Upload must contain 1 byte to 32 MiB.")
+			fail(w, 413, "Upload must contain 1 byte to 64 MiB.")
 			return
 		}
 		if r.Header.Get("Content-Type") != "application/octet-stream" {
@@ -275,7 +276,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.native {
 			value = capability
-			if err := storePayload(s.payload, r.Body); err != nil {
+			if err := storePayload(s.payload, r.Body, r.ContentLength); err != nil {
 				fail(w, 400, "The test data sample did not arrive completely.")
 				return
 			}
@@ -331,7 +332,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "upload":
 		if s.native {
-			receivePayload(w, r, unlock)
+			receivePayload(w, r, unlock, s.recycle)
 			return
 		}
 		// Read exactly the declared length; do not retain, echo, or write payloads.

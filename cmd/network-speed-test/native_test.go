@@ -68,6 +68,7 @@ func TestNativeTransfersAndRevocation(t *testing.T) {
 	response.Body.Close()
 	direct := *f.s
 	direct.native = true
+	direct.streamLimit = payloadSize
 	direct.payload = filepath.Join(f.s.dir, "payload")
 	native := httptest.NewServer(&direct)
 	defer native.Close()
@@ -127,7 +128,7 @@ func TestGrantBoundToClient(t *testing.T) {
 func TestIncompleteSampleDoesNotReplacePayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "payload")
 	os.WriteFile(path, []byte("existing"), 0600)
-	if storePayload(path, strings.NewReader("short")) == nil {
+	if storePayload(path, strings.NewReader("short"), payloadSize) == nil {
 		t.Fatal("accepted truncated sample")
 	}
 	data, _ := os.ReadFile(path)
