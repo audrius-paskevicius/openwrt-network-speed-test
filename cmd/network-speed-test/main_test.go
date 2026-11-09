@@ -46,6 +46,9 @@ func (f *fixture) request(op, session string, body io.Reader) *httptest.Response
 	if op == "upload" {
 		r.Header.Set("Content-Type", "application/octet-stream")
 	}
+	if op == "finish" && body != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	if f.cookie != nil {
 		r.AddCookie(f.cookie)
 	}
@@ -68,7 +71,7 @@ func expect(t *testing.T, w *httptest.ResponseRecorder, status int) {
 	}
 }
 func TestAuthenticationEveryOperation(t *testing.T) {
-	for _, op := range []string{"start", "ping", "download", "upload", "finish"} {
+	for _, op := range []string{"connection", "start", "ping", "download", "upload", "finish"} {
 		for _, sid := range []string{"", strings.Repeat("0", 32), strings.Repeat("b", 32), strings.Repeat("A", 32), "../../../etc/passwd"} {
 			f := newFixture(t)
 			expect(t, f.request(op, sid, strings.NewReader("secret")), 403)
@@ -220,10 +223,82 @@ func TestDownloadDisconnectReleasesLock(t *testing.T) {
 	expect(t, f.request("finish", testSession, nil), 200)
 }
 func TestCPUCounters(t *testing.T) {
-	if cpuPeak(map[string]cpuTimes{"cpu0": {100, 80}}, map[string]cpuTimes{"cpu0": {200, 100}}) != 80 {
+	if cpuPeak(map[string]cpuTimes{"cpu0": {Total: 100, Idle: 80}}, map[string]cpuTimes{"cpu0": {Total: 200, Idle: 100}}) != 80 {
 		t.Fatal("CPU percentage")
 	}
 	if cpuPeak(nil, nil) != 0 {
 		t.Fatal("missing counters")
+	}
+}
+
+func TestConnectionDoesNotStartOrBlockTest(t *testing.T) {
+	f := newFixture(t)
+	expect(t, f.request("connection", testSession, nil), 200)
+	if _, e := os.Stat(filepath.Join(f.s.dir, "run.json")); !os.IsNotExist(e) {
+		t.Fatal("radio lookup started a test")
+	}
+	f.start()
+	f.s.lock = func(string) (func(), error) { return nil, errors.New("busy") }
+	expect(t, f.request("connection", testSession, nil), 200)
+}
+func TestRadioMappingUsesWirelessStatus(t *testing.T) {
+	data := []byte(`{"radio2":{"interfaces":[{"ifname":"phy7-ap0"},{"ifname":"guest"}]},"radio0":{"interfaces":[{"ifname":"phy0-ap0"}]}}`)
+	if radioForInterface(data, "phy7-ap0") != "radio2" || radioForInterface(data, "guest") != "radio2" {
+		t.Fatal("radio mapping must use actual status, not interface numbering")
+	}
+	if radioForInterface(data, "unknown") != "" || radioForInterface([]byte(`invalid`), "phy7-ap0") != "" {
+		t.Fatal("unknown radio must remain unknown")
+	}
+}
+
+func TestLatestResult(t *testing.T) {
+	f := newFixture(t)
+	f.start()
+	body := `{"download_bytes":37500000,"download_ms":6000,"upload_bytes":36000000,"upload_ms":6000,"latency_ms":17}`
+	expect(t, f.request("finish", testSession, strings.NewReader(body)), 200)
+	path := filepath.Join(f.s.dir, "last-result.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record resultRecord
+	if json.Unmarshal(data, &record) != nil || record.DownloadMbps != 50 || record.UploadMbps != 48 || record.Measurements.LatencyMS != 17 || record.Start.Interface != "phy0-ap0" {
+		t.Fatal(string(data))
+	}
+	if strings.Contains(string(data), testSession) || strings.Contains(string(data), "192.0.2.2") {
+		t.Fatal("result contains identity")
+	}
+	f.start()
+	expect(t, f.request("finish", testSession, nil), 200)
+	unchanged, _ := os.ReadFile(path)
+	if string(unchanged) != string(data) {
+		t.Fatal("cancelled run replaced completed result")
+	}
+	f.start()
+	body = strings.Replace(body, "37500000", "75000000", 1)
+	expect(t, f.request("finish", testSession, strings.NewReader(body)), 200)
+	data, _ = os.ReadFile(path)
+	json.Unmarshal(data, &record)
+	if record.DownloadMbps != 100 {
+		t.Fatal("latest result not replaced")
+	}
+}
+func TestRejectInvalidMeasurements(t *testing.T) {
+	for _, body := range []string{`{}`, `{"download_bytes":-1}`, `null`, `{"unknown":1}`, strings.Repeat("x", 1025), `{"download_bytes":37500000,"download_ms":6000,"upload_bytes":36000000,"upload_ms":6000,"latency_ms":17} {}`} {
+		f := newFixture(t)
+		f.start()
+		expect(t, f.request("finish", testSession, strings.NewReader(body)), 400)
+		if _, err := os.Stat(filepath.Join(f.s.dir, "last-result.json")); !os.IsNotExist(err) {
+			t.Fatal("invalid measurements stored")
+		}
+	}
+}
+
+func TestCPUWorkBreakdown(t *testing.T) {
+	before := map[string]cpuTimes{"cpu0": {Total: 100, Idle: 20, User: 20, System: 30, IRQ: 10, SoftIRQ: 20}}
+	after := map[string]cpuTimes{"cpu0": {Total: 200, Idle: 25, User: 25, System: 40, IRQ: 20, SoftIRQ: 90}}
+	result := cpuBreakdown(before, after)["cpu0"]
+	if result["user_percent"] != 5 || result["system_percent"] != 10 || result["irq_percent"] != 10 || result["softirq_percent"] != 70 {
+		t.Fatal(result)
 	}
 }

@@ -1,5 +1,45 @@
 # Verification
 
+## 0.1.0-r6 - latest phone test diagnostics
+
+- Completed tests report measured byte counts and durations, plus HTTP latency,
+  with their authenticated finish request. The router calculates Mbps and stores
+  one latest result with starting/ending radio, CPU busy percentage, and a
+  per-core breakdown of user, system, interrupt and soft-interrupt CPU time.
+- The record is RAM-only, replaced by the next completed test, and contains no
+  session token, client address or MAC address. Interrupted runs do not overwrite
+  it. Validation rejects malformed, oversized or out-of-range measurements.
+- Unit and browser tests verify result calculation, replacement, cancellation,
+  input rejection and agreement with the displayed browser result.
+- The phone subsequently reported about 50 Mbps locally versus 500 Mbps on the
+  internet on the same Wi-Fi, channel 128. The development computer has a 72 Mbps
+  link on radio1, so its earlier comparison cannot reproduce that faster-radio
+  discrepancy. The phone result and radio/CPU diagnostics are needed next.
+
+## 0.1.0-r5 - radio identification and throughput investigation
+
+- Added an authenticated, read-only connection lookup that does not start a run
+  or acquire its transfer lock. Actual OpenWrt wireless status maps the client's
+  associated interface to a radio name; two radios on the same band stay distinct.
+- The page looks up the radio on opening, refreshes every five seconds while
+  visible and idle, and refreshes on return to the tab. Unknown/failed lookups
+  are explicit instead of retaining a stale radio. No traffic test starts itself.
+- Unit and browser checks cover authentication, lookup without a run, lookup
+  during a busy run, interface-to-radio mapping and displayed radio changes.
+- A same-client comparison on radio1 (2.4 GHz, channel 13) measured roughly
+  44 Mbps download / 26 Mbps upload through CGI, versus 43 / 18 through a
+  temporary direct Go HTTP server. Maximum per-core average busy time was 10%
+  and 8%, respectively. This did not show a throughput improvement from bypassing
+  the web server. HTTP response latency did improve in that diagnostic.
+- A router loopback check through the installed CGI endpoint measured about
+  512 Mbps download / 1,536 Mbps upload. It excludes Wi-Fi and includes both
+  server and curl work on the router, so it is only a check for a fixed server
+  throughput ceiling, not a radio performance result.
+- These measurements do not establish why a separate phone measured local
+  50/48 Mbps versus internet 113/88 Mbps. A comparison on the same identified
+  radio is still needed. No arbitrary multiplier or unproven transfer-engine
+  replacement was applied. Temporary diagnostic services are not packaged.
+
 ## 0.1.0-r3 — initial implementation, 2026-11-09
 
 - Go unit tests and vet passed. All nine backend tests also passed natively on

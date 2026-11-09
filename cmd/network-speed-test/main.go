@@ -25,11 +25,31 @@ const runLifetime = 90 * time.Second
 const cookieName = "network_speed_test_run"
 
 type connection struct {
+	Radio     string `json:"radio,omitempty"`
 	Interface string `json:"interface,omitempty"`
 	Band      string `json:"band,omitempty"`
 	Channel   int    `json:"channel,omitempty"`
 }
-type cpuTimes struct{ Total, Idle uint64 }
+type cpuTimes struct{ Total, Idle, User, System, IRQ, SoftIRQ uint64 }
+type measurements struct {
+	DownloadBytes int64   `json:"download_bytes"`
+	DownloadMS    float64 `json:"download_ms"`
+	UploadBytes   int64   `json:"upload_bytes"`
+	UploadMS      float64 `json:"upload_ms"`
+	LatencyMS     float64 `json:"latency_ms"`
+}
+type resultRecord struct {
+	Transport    string                    `json:"transport"`
+	Time         time.Time                 `json:"time"`
+	Start        connection                `json:"start_connection"`
+	End          connection                `json:"end_connection"`
+	Changed      bool                      `json:"connection_changed"`
+	CPU          int                       `json:"router_cpu_busy"`
+	CPUBreakdown map[string]map[string]int `json:"cpu_breakdown"`
+	DownloadMbps float64                   `json:"download_mbps"`
+	UploadMbps   float64                   `json:"upload_mbps"`
+	Measurements measurements              `json:"measurements"`
+}
 type lease struct {
 	Token      string              `json:"token_hash"`
 	Owner      string              `json:"owner_hash"`
@@ -131,7 +151,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := r.URL.Query().Get("op")
-	if op != "start" && op != "ping" && op != "download" && op != "upload" && op != "finish" {
+	var measured *measurements
+	if op != "connection" && op != "start" && op != "ping" && op != "download" && op != "upload" && op != "finish" {
 		fail(w, 400, "Unknown test operation.")
 		return
 	}
@@ -144,8 +165,30 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 415, "Invalid test data.")
 			return
 		}
+	} else if op == "finish" && r.ContentLength != 0 {
+		if r.ContentLength < 1 || r.ContentLength > 1024 || r.Header.Get("Content-Type") != "application/json" {
+			fail(w, 400, "Invalid test measurements.")
+			return
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 1025))
+		decoder.DisallowUnknownFields()
+		var m measurements
+		if err := decoder.Decode(&m); err != nil || m.DownloadBytes < 1 || m.DownloadBytes > maxDownload || m.UploadBytes < 1 || m.UploadBytes > 16*maxDownload || m.DownloadMS <= 0 || m.DownloadMS > 90000 || m.UploadMS <= 0 || m.UploadMS > 90000 || m.LatencyMS < 0 || m.LatencyMS > 18000 {
+			fail(w, 400, "Invalid test measurements.")
+			return
+		}
+		var extra any
+		if decoder.Decode(&extra) != io.EOF {
+			fail(w, 400, "Invalid test measurements.")
+			return
+		}
+		measured = &m
 	} else if r.ContentLength != 0 {
 		fail(w, 400, "Unexpected request body.")
+		return
+	}
+	if op == "connection" {
+		reply(w, 200, map[string]any{"connection": s.inspect(r.Context(), peer(r))})
 		return
 	}
 	if e := os.MkdirAll(s.dir, 0700); e != nil {
@@ -224,13 +267,26 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "finish":
 		end := s.inspect(r.Context(), peer(r))
 		changed := l.Connection.Interface != "" && end != l.Connection
-		peak := cpuPeak(l.CPU, s.cpu())
+		cpuEnd := s.cpu()
+		peak := cpuPeak(l.CPU, cpuEnd)
+		saved := false
+		if measured != nil {
+			record := resultRecord{Transport: scheme, Time: s.now().UTC(), Start: l.Connection, End: end, Changed: changed, CPU: peak, Measurements: *measured, DownloadMbps: float64(measured.DownloadBytes) * 8 / measured.DownloadMS / 1000, UploadMbps: float64(measured.UploadBytes) * 8 / measured.UploadMS / 1000}
+			record.CPUBreakdown = cpuBreakdown(l.CPU, cpuEnd)
+			data, err := json.Marshal(record)
+			if err == nil {
+				path := filepath.Join(s.dir, "last-result.new")
+				if os.WriteFile(path, data, 0600) == nil {
+					saved = os.Rename(path, filepath.Join(s.dir, "last-result.json")) == nil
+				}
+			}
+		}
 		if e = os.Remove(filepath.Join(s.dir, "run.json")); e != nil {
 			fail(w, 503, "Cannot finish test.")
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-		reply(w, 200, map[string]any{"connection": end, "connection_changed": changed, "router_cpu_busy": peak})
+		reply(w, 200, map[string]any{"connection": end, "connection_changed": changed, "router_cpu_busy": peak, "result_saved": saved})
 	}
 }
 func readCPU() map[string]cpuTimes {
@@ -248,6 +304,16 @@ func readCPU() map[string]cpuTimes {
 		for i := 1; i < len(f) && i <= 8; i++ {
 			v, _ := strconv.ParseUint(f[i], 10, 64)
 			c.Total += v
+			switch i {
+			case 1, 2:
+				c.User += v
+			case 3:
+				c.System = v
+			case 6:
+				c.IRQ = v
+			case 7:
+				c.SoftIRQ = v
+			}
 			if i == 4 || i == 5 {
 				c.Idle += v
 			}
@@ -273,6 +339,42 @@ func cpuPeak(before, after map[string]cpuTimes) int {
 		}
 	}
 	return peak
+}
+func cpuBreakdown(before, after map[string]cpuTimes) map[string]map[string]int {
+	out := map[string]map[string]int{}
+	for core, b := range before {
+		a, ok := after[core]
+		if !ok || a.Total <= b.Total {
+			continue
+		}
+		total := a.Total - b.Total
+		percent := func(start, end uint64) int {
+			if end < start || end-start > total {
+				return 0
+			}
+			return int((end - start) * 100 / total)
+		}
+		out[core] = map[string]int{"user_percent": percent(b.User, a.User), "system_percent": percent(b.System, a.System), "irq_percent": percent(b.IRQ, a.IRQ), "softirq_percent": percent(b.SoftIRQ, a.SoftIRQ)}
+	}
+	return out
+}
+func radioForInterface(data []byte, iface string) string {
+	var radios map[string]struct {
+		Interfaces []struct {
+			Ifname string `json:"ifname"`
+		} `json:"interfaces"`
+	}
+	if json.Unmarshal(data, &radios) != nil {
+		return ""
+	}
+	for name, radio := range radios {
+		for _, network := range radio.Interfaces {
+			if network.Ifname == iface {
+				return name
+			}
+		}
+	}
+	return ""
 }
 func inspect(ctx context.Context, address string) connection {
 	// Only inspect the requesting client's directly connected neighbour and association.
@@ -335,6 +437,9 @@ func inspect(ctx context.Context, address string) connection {
 			}
 		}
 		c := connection{Interface: iface}
+		if status, err := command(ctx, "/bin/ubus", "-S", "call", "network.wireless", "status"); err == nil {
+			c.Radio = radioForInterface(status, iface)
+		}
 		switch {
 		case freq == 2484:
 			c.Band = "2.4 GHz"

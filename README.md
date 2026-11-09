@@ -19,6 +19,11 @@ Download, upload and local request latency are measured between that browser and
 the router. Nothing contacts an internet speed-test service. There is one button;
 warm-up and measurement lengths are automatic.
 
+The connected OpenWrt radio name, band and channel appear when the page opens and
+refresh every five seconds while it is visible and idle. Radio names come from
+OpenWrt wireless status, not guesses based on interface numbers. If the router
+cannot identify a direct Wi-Fi association, the page says so.
+
 The page uses native LuCI tables, buttons, progress bars and messages, following
 the active router theme.
 
@@ -46,7 +51,10 @@ is a UI acknowledgement; server-side LuCI session authorization always applies.
   sized up to 32 MiB and are counted only after the router confirms receipt.
 - Payloads are streamed/discarded in memory. A tiny exclusive-run lease lives in
   `/var/run/network-speed-test` (OpenWrt RAM storage). No payload or results are
-  written to flash, and no result history is stored.
+  written to flash. The latest completed result (client-reported byte counts,
+  timings, radio before/after and router CPU usage) is kept in RAM for diagnosis.
+  A new completed result replaces it; reboot clears it. It contains no client IP,
+  MAC address or session token. There is no accumulated result history.
 - The existing LuCI web server serves the CGI endpoint. No extra listener,
   firewall opening, scheduled test or background daemon is installed.
 - Every request requires a live LuCI session with the package ACL. The session
