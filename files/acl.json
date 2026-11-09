@@ -1,0 +1,6 @@
+{
+  "luci-app-network-speed-test": {
+    "description": "Run local client-to-router speed tests",
+    "read": { "network-speed-test": { "test": ["run"] } }
+  }
+}

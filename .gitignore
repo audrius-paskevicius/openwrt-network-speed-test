@@ -1,0 +1,8 @@
+.private/
+.tools/
+dist/
+build/
+*.exe
+*.apk
+*.pem
+!release/*-public.pem

@@ -1,0 +1,364 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/cgi"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const maxUpload = 32 << 20
+const maxDownload = 2 << 30
+const runLifetime = 90 * time.Second
+const cookieName = "network_speed_test_run"
+
+type connection struct {
+	Interface string `json:"interface,omitempty"`
+	Band      string `json:"band,omitempty"`
+	Channel   int    `json:"channel,omitempty"`
+}
+type cpuTimes struct{ Total, Idle uint64 }
+type lease struct {
+	Token      string              `json:"token_hash"`
+	Owner      string              `json:"owner_hash"`
+	Peer       string              `json:"peer"`
+	Expires    time.Time           `json:"expires"`
+	Connection connection          `json:"connection"`
+	CPU        map[string]cpuTimes `json:"cpu"`
+}
+type server struct {
+	dir            string
+	authorize      func(context.Context, string) bool
+	inspect        func(context.Context, string) connection
+	cpu            func() map[string]cpuTimes
+	lock           func(string) (func(), error)
+	now            func() time.Time
+	streamLimit    int64
+	streamDuration time.Duration
+}
+
+func digest(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
+func validHex(s string, n int) bool {
+	if len(s) != n || strings.Trim(s, "0") == "" {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+func command(ctx context.Context, program string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, program, args...).Output()
+}
+func authorized(ctx context.Context, sid string) bool {
+	request, _ := json.Marshal(map[string]string{"ubus_rpc_session": sid, "scope": "network-speed-test", "object": "test", "function": "run"})
+	b, e := command(ctx, "/bin/ubus", "-S", "call", "session", "access", string(request))
+	var result struct {
+		Access bool `json:"access"`
+	}
+	return e == nil && json.Unmarshal(b, &result) == nil && result.Access
+}
+func reply(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+func fail(w http.ResponseWriter, status int, message string) {
+	reply(w, status, map[string]string{"error": message})
+}
+func peer(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+func (s *server) readLease() (lease, error) {
+	var l lease
+	b, e := os.ReadFile(filepath.Join(s.dir, "run.json"))
+	if e == nil {
+		e = json.Unmarshal(b, &l)
+	}
+	return l, e
+}
+func (s *server) saveLease(l lease) error {
+	b, e := json.Marshal(l)
+	if e != nil {
+		return e
+	}
+	path := filepath.Join(s.dir, "run.new")
+	if e = os.WriteFile(path, b, 0600); e != nil {
+		return e
+	}
+	return os.Rename(path, filepath.Join(s.dir, "run.json"))
+}
+func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-transform")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if r.Method != "POST" {
+		w.Header().Set("Allow", "POST")
+		fail(w, 405, "Use Start on the LuCI Speed Test page.")
+		return
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+r.Host {
+		fail(w, 403, "Use the Speed Test page on this router.")
+		return
+	}
+	sid, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || !validHex(sid, 32) || !s.authorize(r.Context(), sid) {
+		fail(w, 403, "Your router login has expired or does not allow speed tests. Sign in again.")
+		return
+	}
+	op := r.URL.Query().Get("op")
+	if op != "start" && op != "ping" && op != "download" && op != "upload" && op != "finish" {
+		fail(w, 400, "Unknown test operation.")
+		return
+	}
+	if op == "upload" {
+		if r.ContentLength < 1 || r.ContentLength > maxUpload {
+			fail(w, 413, "Upload must contain 1 byte to 32 MiB.")
+			return
+		}
+		if r.Header.Get("Content-Type") != "application/octet-stream" {
+			fail(w, 415, "Invalid test data.")
+			return
+		}
+	} else if r.ContentLength != 0 {
+		fail(w, 400, "Unexpected request body.")
+		return
+	}
+	if e := os.MkdirAll(s.dir, 0700); e != nil {
+		fail(w, 503, "Cannot prepare test.")
+		return
+	}
+	unlock, e := s.lock(filepath.Join(s.dir, "request.lock"))
+	if e != nil {
+		fail(w, 409, "Another transfer is running. Try again shortly.")
+		return
+	}
+	defer unlock()
+	l, leaseError := s.readLease()
+	if op == "start" {
+		if leaseError == nil && l.Expires.After(s.now()) {
+			fail(w, 409, "Another test is running. Wait a moment, then try again.")
+			return
+		}
+		if leaseError != nil && !errors.Is(leaseError, os.ErrNotExist) {
+			fail(w, 503, "Cannot read test state.")
+			return
+		}
+		token := make([]byte, 32)
+		if _, e = rand.Read(token); e != nil {
+			fail(w, 503, "Cannot prepare test.")
+			return
+		}
+		value := hex.EncodeToString(token)
+		l = lease{Token: digest(value), Owner: digest(sid), Peer: peer(r), Expires: s.now().Add(runLifetime), Connection: s.inspect(r.Context(), peer(r)), CPU: s.cpu()}
+		if e = s.saveLease(l); e != nil {
+			fail(w, 503, "Cannot prepare test.")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 90})
+		reply(w, 200, map[string]any{"connection": l.Connection})
+		return
+	}
+	c, e := r.Cookie(cookieName)
+	if leaseError != nil || e != nil || !validHex(c.Value, 64) || !l.Expires.After(s.now()) || l.Token != digest(c.Value) || l.Owner != digest(sid) || l.Peer != peer(r) {
+		fail(w, 409, "This test has expired. Press Start to try again.")
+		return
+	}
+	switch op {
+	case "ping":
+		reply(w, 200, map[string]bool{"ok": true})
+	case "download":
+		buffer := make([]byte, 64<<10)
+		if _, e = rand.Read(buffer); e != nil {
+			fail(w, 503, "Cannot prepare test data.")
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		until := s.now().Add(s.streamDuration)
+		for sent := int64(0); sent < s.streamLimit && s.now().Before(until); {
+			if r.Context().Err() != nil {
+				return
+			}
+			chunk := buffer
+			if remaining := s.streamLimit - sent; remaining < int64(len(chunk)) {
+				chunk = chunk[:remaining]
+			}
+			n, err := w.Write(chunk)
+			if err != nil || n != len(chunk) {
+				return
+			}
+			sent += int64(n)
+		}
+	case "upload":
+		// Read exactly the declared length; do not retain, echo, or write payloads.
+		n, err := io.CopyBuffer(io.Discard, io.LimitReader(r.Body, r.ContentLength), make([]byte, 64<<10))
+		if err != nil || n != r.ContentLength {
+			fail(w, 400, "Upload did not complete.")
+			return
+		}
+		reply(w, 200, map[string]int64{"bytes": n})
+	case "finish":
+		end := s.inspect(r.Context(), peer(r))
+		changed := l.Connection.Interface != "" && end != l.Connection
+		peak := cpuPeak(l.CPU, s.cpu())
+		if e = os.Remove(filepath.Join(s.dir, "run.json")); e != nil {
+			fail(w, 503, "Cannot finish test.")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/cgi-bin/network-speed-test", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+		reply(w, 200, map[string]any{"connection": end, "connection_changed": changed, "router_cpu_busy": peak})
+	}
+}
+func readCPU() map[string]cpuTimes {
+	b, e := os.ReadFile("/proc/stat")
+	if e != nil {
+		return nil
+	}
+	out := map[string]cpuTimes{}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 || !strings.HasPrefix(f[0], "cpu") || f[0] == "cpu" {
+			continue
+		}
+		var c cpuTimes
+		for i := 1; i < len(f) && i <= 8; i++ {
+			v, _ := strconv.ParseUint(f[i], 10, 64)
+			c.Total += v
+			if i == 4 || i == 5 {
+				c.Idle += v
+			}
+		}
+		out[f[0]] = c
+	}
+	return out
+}
+func cpuPeak(before, after map[string]cpuTimes) int {
+	peak := 0
+	for core, b := range before {
+		a, ok := after[core]
+		if !ok || a.Total <= b.Total || a.Idle < b.Idle {
+			continue
+		}
+		total, idle := a.Total-b.Total, a.Idle-b.Idle
+		if idle > total {
+			continue
+		}
+		p := int((total - idle) * 100 / total)
+		if p > peak {
+			peak = p
+		}
+	}
+	return peak
+}
+func inspect(ctx context.Context, address string) connection {
+	// Only inspect the requesting client's directly connected neighbour and association.
+	if net.ParseIP(address) == nil {
+		return connection{}
+	}
+	b, e := command(ctx, "/sbin/ip", "neigh", "show", "to", address)
+	if e != nil {
+		return connection{}
+	}
+	fields := strings.Fields(string(b))
+	mac := ""
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "lladdr" {
+			mac = strings.ToLower(fields[i+1])
+			break
+		}
+	}
+	if _, e = net.ParseMAC(mac); e != nil {
+		return connection{}
+	}
+	b, e = command(ctx, "/bin/ubus", "-S", "list", "hostapd.*")
+	if e != nil {
+		return connection{}
+	}
+	for _, object := range strings.Fields(string(b)) {
+		data, err := command(ctx, "/bin/ubus", "-S", "call", object, "get_clients", "{}")
+		if err != nil {
+			continue
+		}
+		var result struct {
+			Frequency int                        `json:"freq"`
+			Clients   map[string]json.RawMessage `json:"clients"`
+		}
+		if json.Unmarshal(data, &result) != nil {
+			continue
+		}
+		found := false
+		for key := range result.Clients {
+			if strings.EqualFold(key, mac) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		iface := strings.TrimPrefix(object, "hostapd.")
+		freq := result.Frequency
+		if freq == 0 {
+			info, err := command(ctx, "/usr/sbin/iw", "dev", iface, "info")
+			if err == nil {
+				words := strings.Fields(string(info))
+				for i := 0; i+2 < len(words); i++ {
+					if words[i] == "channel" {
+						freq, _ = strconv.Atoi(strings.TrimPrefix(words[i+2], "("))
+						break
+					}
+				}
+			}
+		}
+		c := connection{Interface: iface}
+		switch {
+		case freq == 2484:
+			c.Band = "2.4 GHz"
+			c.Channel = 14
+		case freq >= 2412 && freq <= 2472:
+			c.Band = "2.4 GHz"
+			c.Channel = (freq - 2407) / 5
+		case freq >= 5000 && freq < 5925:
+			c.Band = "5 GHz"
+			c.Channel = (freq - 5000) / 5
+		case freq >= 5955 && freq <= 7115:
+			c.Band = "6 GHz"
+			c.Channel = (freq - 5950) / 5
+		}
+		return c
+	}
+	return connection{}
+}
+func main() {
+	// A client that disconnects or stops uploading cannot leave a CGI process behind.
+	timer := time.AfterFunc(20*time.Second, func() { os.Exit(1) })
+	defer timer.Stop()
+	s := &server{dir: "/var/run/network-speed-test", authorize: authorized, inspect: inspect, cpu: readCPU, lock: lockFile, now: time.Now, streamLimit: maxDownload, streamDuration: 13 * time.Second}
+	if cgi.Serve(s) != nil {
+		os.Exit(1)
+	}
+}
